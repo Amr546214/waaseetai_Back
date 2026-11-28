@@ -4,6 +4,7 @@ import { AppError } from '../utils/app-error';
 import { createPrivateDownloadUrl } from '../utils/cloudinary-storage';
 import { isOwnCloudinaryUrl } from '../utils/cloudinary-url';
 import { isPrivateRef } from '../utils/kyc-private-ref';
+import { isAcceptableProofLink } from '../utils/setup-portfolio-proofs';
 import { accountAuditLogService, AuditContext } from './account-logs.service';
 
 export const KYC_DOCUMENT_KEYS = [
@@ -34,7 +35,7 @@ export function linkTtlSeconds(): number {
 const NOT_FOUND = () => new AppError('لا توجد وثيقة مرفوعة لهذا الحقل', 404);
 const FORBIDDEN = () => new AppError('غير مصرح لك بالوصول إلى هذه الوثيقة', 403);
 
-interface Resolved { ownerUserId: string; stored: string | null }
+interface Resolved { ownerUserId: string; stored: string | null; /** a link the owner attached (https, never fetched here): the administration opens it as it is */ externalLink?: boolean }
 
 async function resolve(input: KycAccessInput, target: string): Promise<Resolved> {
 	switch (input.document) {
@@ -68,10 +69,10 @@ async function resolve(input: KycAccessInput, target: string): Promise<Resolved>
 		}
 		case 'specialty_proof': {
 			if (!input.id) throw new AppError('معرّف الملف مطلوب', 400);
-			const row = await prisma.proofAttachment.findUnique({ where: { id: input.id }, select: { fileUrl: true, workSample: { select: { providerSpecialty: { select: { providerProfile: { select: { userId: true } } } } } } } });
+			const row = await prisma.proofAttachment.findUnique({ where: { id: input.id }, select: { fileUrl: true, mimeType: true, workSample: { select: { providerSpecialty: { select: { providerProfile: { select: { userId: true } } } } } } } });
 			const owner = row?.workSample?.providerSpecialty?.providerProfile?.userId;
 			if (!row || !owner) throw NOT_FOUND();
-			return { ownerUserId: owner, stored: row.fileUrl };
+			return { ownerUserId: owner, stored: row.fileUrl, externalLink: row.mimeType === 'text/uri-list' };
 		}
 		case 'accreditation_upload': {
 			// Batch B T1: a proof document of an approval request: only a COMPLETED upload is readable, by its owner or an admin.
@@ -119,7 +120,7 @@ export async function createKycAccessLink(requester: Requester, input: KycAccess
 	if (admin && !input.userId && !idKeyed) throw new AppError('معرّف المستخدم مطلوب للمشرف', 400);
 	const target = admin ? (input.userId as string) : requester.id;
 
-	const { ownerUserId, stored } = await resolve(input, target);
+	const { ownerUserId, stored, externalLink } = await resolve(input, target);
 	if (!admin && ownerUserId !== requester.id) throw FORBIDDEN();
 	if (!stored) throw NOT_FOUND();
 
@@ -131,6 +132,9 @@ export async function createKycAccessLink(requester: Requester, input: KycAccess
 	} else if (isOwnCloudinaryUrl(stored)) {
 		// Transition: a document uploaded before the private-storage change. It keeps working until the migration moves it.
 		link = { url: stored, expiresAt: null, expiresInSeconds: null, private: false, legacy: true };
+	} else if (externalLink && isAcceptableProofLink(stored)) {
+		// a link proof (a repository, a portfolio page): the owner and the administration open it as it is; it is never fetched by the server
+		link = { url: stored, expiresAt: null, expiresInSeconds: null, private: false, legacy: false };
 	} else {
 		throw NOT_FOUND();
 	}
